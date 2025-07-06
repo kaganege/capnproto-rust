@@ -186,6 +186,8 @@ impl CodeGenerationCommand {
 pub struct GeneratorContext<'a> {
     pub request: schema_capnp::code_generator_request::Reader<'a>,
     pub node_map: collections::hash_map::HashMap<u64, schema_capnp::node::Reader<'a>>,
+    pub source_info_map:
+        collections::hash_map::HashMap<u64, schema_capnp::node::source_info::Reader<'a>>,
     pub scope_map: collections::hash_map::HashMap<u64, Vec<String>>,
 
     /// Map from node ID to the node ID of its parent scope. This is equal to node.scope_id
@@ -215,6 +217,10 @@ impl<'a> GeneratorContext<'a> {
         let mut ctx = GeneratorContext {
             request: message.get_root()?,
             node_map: collections::hash_map::HashMap::<u64, schema_capnp::node::Reader<'a>>::new(),
+            source_info_map: collections::hash_map::HashMap::<
+                u64,
+                schema_capnp::node::source_info::Reader<'a>,
+            >::new(),
             scope_map: collections::hash_map::HashMap::<u64, Vec<String>>::new(),
             node_parents: collections::hash_map::HashMap::new(),
             capnp_root: code_generation_command.capnp_root.clone(),
@@ -241,6 +247,11 @@ impl<'a> GeneratorContext<'a> {
                     }
                 }
             }
+        }
+
+        for source_info in ctx.request.get_source_info()? {
+            ctx.source_info_map
+                .insert(source_info.get_id(), source_info);
         }
 
         for requested_file in ctx.request.get_requested_files()? {
@@ -1989,6 +2000,8 @@ fn generate_node(
         nested_output.push(generate_node(ctx, id, ctx.get_last_name(id)?)?);
     }
 
+    let source_info_reader = &ctx.source_info_map[&node_id];
+
     match node_reader.which()? {
         node::File(()) => {
             output.push(Branch(nested_output));
@@ -1996,6 +2009,12 @@ fn generate_node(
         node::Struct(struct_reader) => {
             let params = node_reader.parameters_texts(ctx);
             output.push(BlankLine);
+
+            if source_info_reader.has_doc_comment() {
+                let doc_comment = source_info_reader.get_doc_comment()?;
+                let doc_comment = doc_comment.to_str()?;
+                output.push(Line(format!("/// {doc_comment}")));
+            }
 
             let is_generic = node_reader.get_is_generic();
             if is_generic {
