@@ -1375,7 +1375,10 @@ fn used_params_of_brand(
 fn generate_union(
     ctx: &GeneratorContext,
     discriminant_offset: u32,
-    fields: &[schema_capnp::field::Reader],
+    fields: &[(
+        schema_capnp::field::Reader,
+        Option<schema_capnp::node::source_info::member::Reader>,
+    )],
     is_reader: bool,
     params: &TypeParameterTexts,
 ) -> ::capnp::Result<(
@@ -1404,7 +1407,7 @@ fn generate_union(
 
     let doffset = discriminant_offset as usize;
 
-    for field in fields {
+    for (field, field_info) in fields {
         let dvalue = field.get_discriminant_value() as usize;
 
         let field_name = get_field_name(*field)?;
@@ -1452,6 +1455,21 @@ fn generate_union(
             }
             _ => ty,
         };
+
+        if let Some(field_info) = field_info.and_then(|reader| {
+            if reader.has_doc_comment() {
+                Some(reader)
+            } else {
+                None
+            }
+        }) {
+            let doc_comment = field_info.get_doc_comment()?;
+            let doc_comment = doc_comment.to_str()?;
+
+            for line in doc_comment.lines() {
+                enum_interior.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+            }
+        }
 
         enum_interior.push(Line(format!("{enumerant_name}({ty1}),")));
     }
@@ -2082,7 +2100,8 @@ fn generate_node(
 
             let mut has_pointer_field = false;
             let fields = struct_reader.get_fields()?;
-            for field in fields {
+            let field_infos = source_info_reader.map(|r| r.get_members());
+            for (i, field) in fields.iter().enumerate() {
                 let name = get_field_name(field)?;
                 let styled_name = camel_to_snake_case(name);
 
@@ -2123,7 +2142,15 @@ fn generate_node(
                         line("}"),
                     ]));
                 } else {
-                    union_fields.push(field);
+                    let field_info = field_infos.as_ref().and_then(|r| {
+                        if let Ok(r) = r {
+                            Some(r.get(i as _))
+                        } else {
+                            None
+                        }
+                    });
+
+                    union_fields.push((field, field_info));
                 }
 
                 builder_members.push(generate_setter(
@@ -2170,7 +2197,7 @@ fn generate_node(
                 let mut reexports = String::new();
                 reexports.push_str("pub use self::Which::{");
                 let mut whichs = Vec::new();
-                for f in &union_fields {
+                for (f, _) in &union_fields {
                     whichs.push(capitalize_first_letter(get_field_name(*f)?));
                 }
                 reexports.push_str(&whichs.join(","));
