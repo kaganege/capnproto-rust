@@ -2664,6 +2664,7 @@ fn generate_node(
             mod_interior.push(line("#![allow(unused_variables)]"));
 
             let methods = interface.get_methods()?;
+            let method_infos = source_info_reader.map(|r| r.get_members());
             for (ordinal, method) in methods.into_iter().enumerate() {
                 let name = method.get_name()?.to_str()?;
 
@@ -2696,6 +2697,26 @@ fn generate_node(
                     params_ty_params,
                     param_type
                 )));
+
+                let mut doc_comments = Vec::new();
+
+                if let Some(method_info) = method_infos.as_ref().and_then(|r| {
+                    if let Ok(r) = r {
+                        Some(r.get(ordinal as _))
+                    } else {
+                        None
+                    }
+                }) {
+                    let doc_comment = method_info.get_doc_comment()?;
+                    let doc_comment = doc_comment.to_str()?;
+
+                    for line in doc_comment.lines() {
+                        doc_comments.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                    }
+                }
+
+                server_interior.extend(doc_comments.clone());
+                client_impl_interior.extend(doc_comments);
 
                 let result_id = method.get_result_struct_type();
                 if result_id != STREAM_RESULT_ID {
@@ -2731,6 +2752,7 @@ fn generate_node(
                         results_ty_params,
                         result_type
                     )));
+
                     server_interior.push(
                         Line(fmt!(ctx,
                                   "fn {}(&mut self, _: {}Params<{}>, _: {}Results<{}>) -> {capnp}::capability::Promise<(), {capnp}::Error> {{ {capnp}::capability::Promise::err({capnp}::Error::unimplemented(\"method {}::Server::{} not implemented\".to_string())) }}",
