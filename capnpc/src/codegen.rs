@@ -2121,35 +2121,65 @@ fn generate_node(
                     field::Group(_) => has_pointer_field = true,
                 }
 
+                let field_info = field_infos.as_ref().and_then(|r| {
+                    if let Ok(r) = r {
+                        Some(r.get(i as _))
+                    } else {
+                        None
+                    }
+                });
+
                 if !is_union_field {
                     pipeline_impl_interior.push(generate_pipeline_getter(ctx, field)?);
                     let (ty, get, default_decl) = getter_text(ctx, &field, true, true)?;
                     if let Some(default) = default_decl {
                         private_mod_interior.push(default.clone());
                     }
-                    reader_members.push(Branch(vec![
-                        line("#[inline]"),
-                        Line(format!("pub fn get_{styled_name}(self) {ty} {{")),
-                        indent(get),
-                        line("}"),
-                    ]));
+                    let mut doc_comments = Vec::new();
 
-                    let (ty_b, get_b, _) = getter_text(ctx, &field, false, true)?;
-                    builder_members.push(Branch(vec![
-                        line("#[inline]"),
-                        Line(format!("pub fn get_{styled_name}(self) {ty_b} {{")),
-                        indent(get_b),
-                        line("}"),
-                    ]));
-                } else {
-                    let field_info = field_infos.as_ref().and_then(|r| {
-                        if let Ok(r) = r {
-                            Some(r.get(i as _))
+                    if let Some(field_info) = field_info.and_then(|reader| {
+                        if reader.has_doc_comment() {
+                            Some(reader)
                         } else {
                             None
                         }
-                    });
+                    }) {
+                        let doc_comment = field_info.get_doc_comment()?;
+                        let doc_comment = doc_comment.to_str()?;
 
+                        for line in doc_comment.lines() {
+                            doc_comments
+                                .push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                        }
+                    }
+
+                    reader_members.push(Branch(
+                        [
+                            doc_comments.clone(),
+                            vec![
+                                line("#[inline]"),
+                                Line(format!("pub fn get_{styled_name}(self) {ty} {{")),
+                                indent(get),
+                                line("}"),
+                            ],
+                        ]
+                        .concat(),
+                    ));
+
+                    let (ty_b, get_b, _) = getter_text(ctx, &field, false, true)?;
+                    builder_members.push(Branch(
+                        [
+                            doc_comments,
+                            vec![
+                                line("#[inline]"),
+                                Line(format!("pub fn get_{styled_name}(self) {ty_b} {{")),
+                                indent(get_b),
+                                line("}"),
+                            ],
+                        ]
+                        .concat(),
+                    ));
+                } else {
                     union_fields.push((field, field_info));
                 }
 
