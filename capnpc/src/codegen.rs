@@ -2000,7 +2000,7 @@ fn generate_node(
         nested_output.push(generate_node(ctx, id, ctx.get_last_name(id)?)?);
     }
 
-    let source_info_reader = &ctx.source_info_map[&node_id];
+    let source_info_reader = ctx.source_info_map.get(&node_id);
 
     match node_reader.which()? {
         node::File(()) => {
@@ -2010,7 +2010,13 @@ fn generate_node(
             let params = node_reader.parameters_texts(ctx);
             output.push(BlankLine);
 
-            if source_info_reader.has_doc_comment() {
+            if let Some(source_info_reader) = source_info_reader.and_then(|reader| {
+                if reader.has_doc_comment() {
+                    Some(reader)
+                } else {
+                    None
+                }
+            }) {
                 let doc_comment = source_info_reader.get_doc_comment()?;
                 let doc_comment = doc_comment.to_str()?;
                 output.push(Line(format!("/// {doc_comment}")));
