@@ -2018,8 +2018,11 @@ fn generate_node(
                 }
             }) {
                 let doc_comment = source_info_reader.get_doc_comment()?;
-                let doc_comment = doc_comment.to_str()?.trim();
-                output.push(Line(format!("/// {doc_comment}")));
+                let doc_comment = doc_comment.to_str()?;
+
+                for line in doc_comment.lines() {
+                    output.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                }
             }
 
             let is_generic = node_reader.get_is_generic();
