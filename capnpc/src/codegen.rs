@@ -2018,7 +2018,7 @@ fn generate_node(
                 }
             }) {
                 let doc_comment = source_info_reader.get_doc_comment()?;
-                let doc_comment = doc_comment.to_str()?;
+                let doc_comment = doc_comment.to_str()?.trim();
                 output.push(Line(format!("/// {doc_comment}")));
             }
 
