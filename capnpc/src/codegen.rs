@@ -3034,6 +3034,22 @@ fn generate_node(
             mod_interior.push(Branch(vec![Branch(nested_output)]));
 
             output.push(BlankLine);
+
+            if let Some(source_info_reader) = source_info_reader.and_then(|reader| {
+                if reader.has_doc_comment() {
+                    Some(reader)
+                } else {
+                    None
+                }
+            }) {
+                let doc_comment = source_info_reader.get_doc_comment()?;
+                let doc_comment = doc_comment.to_str()?;
+
+                for line in doc_comment.lines() {
+                    output.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                }
+            }
+
             if is_generic {
                 output.push(Line(format!(
                     "pub mod {} {{ /* ({}) */",
@@ -3152,6 +3168,21 @@ fn generate_node(
                 }
             };
 
+            if let Some(source_info_reader) = source_info_reader.and_then(|reader| {
+                if reader.has_doc_comment() {
+                    Some(reader)
+                } else {
+                    None
+                }
+            }) {
+                let doc_comment = source_info_reader.get_doc_comment()?;
+                let doc_comment = doc_comment.to_str()?;
+
+                for line in doc_comment.lines() {
+                    output.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                }
+            }
+
             output.push(formatted_text);
         }
 
@@ -3169,11 +3200,35 @@ fn generate_node(
             } else {
                 interior.push(Line(fmt!(ctx,"pub fn get_type<{0}>() -> {capnp}::introspect::Type {1} {{ <{2} as {capnp}::introspect::Introspect>::introspect() }}", params.params, params.where_clause, ty.type_string(ctx, Leaf::Owned)?)));
             }
-            output.push(Branch(vec![
-                Line(format!("pub mod {} {{", last_name)),
-                indent(interior),
-                Line("}".into()),
-            ]));
+
+            let mut doc_comments = Vec::new();
+
+            if let Some(source_info_reader) = source_info_reader.and_then(|reader| {
+                if reader.has_doc_comment() {
+                    Some(reader)
+                } else {
+                    None
+                }
+            }) {
+                let doc_comment = source_info_reader.get_doc_comment()?;
+                let doc_comment = doc_comment.to_str()?;
+
+                for line in doc_comment.lines() {
+                    doc_comments.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                }
+            }
+
+            output.push(Branch(
+                [
+                    doc_comments,
+                    vec![
+                        Line(format!("pub mod {} {{", last_name)),
+                        indent(interior),
+                        Line("}".into()),
+                    ],
+                ]
+                .concat(),
+            ));
         }
     }
 
