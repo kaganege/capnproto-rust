@@ -2514,8 +2514,25 @@ fn generate_node(
             let mut members = Vec::new();
             let mut match_branches = Vec::new();
             let enumerants = enum_reader.get_enumerants()?;
+            let enumerant_infos = source_info_reader.map(|r| r.get_members());
             for (ii, enumerant) in enumerants.into_iter().enumerate() {
                 let enumerant = capitalize_first_letter(get_enumerant_name(enumerant)?);
+
+                if let Some(enumerant_info) = enumerant_infos.as_ref().and_then(|r| {
+                    if let Ok(r) = r {
+                        Some(r.get(ii as _))
+                    } else {
+                        None
+                    }
+                }) {
+                    let doc_comment = enumerant_info.get_doc_comment()?;
+                    let doc_comment = doc_comment.to_str()?;
+
+                    for line in doc_comment.lines() {
+                        members.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                    }
+                }
+
                 members.push(Line(format!("{enumerant} = {ii},")));
                 match_branches.push(Line(format!(
                     "{ii} => ::core::result::Result::Ok(Self::{enumerant}),"
@@ -2525,6 +2542,21 @@ fn generate_node(
                 ctx,
                 "n => ::core::result::Result::Err({capnp}::NotInSchema(n)),"
             )));
+
+            if let Some(source_info_reader) = source_info_reader.and_then(|reader| {
+                if reader.has_doc_comment() {
+                    Some(reader)
+                } else {
+                    None
+                }
+            }) {
+                let doc_comment = source_info_reader.get_doc_comment()?;
+                let doc_comment = doc_comment.to_str()?;
+
+                for line in doc_comment.lines() {
+                    output.push(Line(format!("#[doc = \"{}\"]", line.escape_default())));
+                }
+            }
 
             output.push(Branch(vec![
                 line("#[repr(u16)]"),
