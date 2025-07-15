@@ -471,6 +471,20 @@ impl core::convert::From<::std::io::Error> for Error {
 }
 
 #[cfg(feature = "embedded-io")]
+impl embedded_io::Error for Error {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        embedded_io::ErrorKind::Other
+    }
+}
+
+#[cfg(feature = "embedded-io")]
+impl From<embedded_io::SliceWriteError> for Error {
+    fn from(_: embedded_io::SliceWriteError) -> Self {
+        Self::from_kind(ErrorKind::Failed)
+    }
+}
+
+#[cfg(feature = "embedded-io")]
 impl From<embedded_io::ErrorKind> for ErrorKind {
     fn from(value: embedded_io::ErrorKind) -> Self {
         match value {
@@ -512,6 +526,12 @@ impl core::convert::From<core::str::Utf8Error> for Error {
 impl core::convert::From<NotInSchema> for Error {
     fn from(e: NotInSchema) -> Self {
         Self::from_kind(ErrorKind::EnumValueOrUnionDiscriminantNotPresent(e))
+    }
+}
+
+impl core::convert::From<core::convert::Infallible> for Error {
+    fn from(_: core::convert::Infallible) -> Self {
+        Self::from_kind(ErrorKind::Failed)
     }
 }
 

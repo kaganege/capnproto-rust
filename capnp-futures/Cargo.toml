@@ -1,7 +1,7 @@
 [package]
 name = "capnp-futures"
 version = "0.21.0"
-authors = [ "David Renshaw <drenshaw@gmail.com>" ]
+authors = ["David Renshaw <drenshaw@gmail.com>"]
 license = "MIT"
 
 description = "async serialization for Cap'n Proto messages"
@@ -11,26 +11,43 @@ edition = "2021"
 
 keywords = ["async"]
 
+[features]
+default = ["std"]
+std = ["dep:futures-channel", "dep:futures-util", "capnp/std"]
+alloc = ["capnp/alloc", "embedded-io-async/alloc"]
+
 [dependencies]
-capnp = { version = "0.21.0", path = "../capnp" }
+capnp = { version = "0.21.0", path = "../capnp", default-features = false }
+
+[dependencies.embedded-io-async]
+version = "0.6.1"
 
 [dependencies.futures-channel]
 version = "0.3.0"
 default-features = false
+optional = true
 features = ["std"]
 
 [dependencies.futures-util]
 version = "0.3.0"
 default-features = false
+optional = true
 features = ["io", "std"]
 
 [dev-dependencies.futures]
 version = "0.3.0"
 default-features = false
-features = ["executor"]
+features = ["std", "executor"]
+
+[dev-dependencies.embedded-io-adapters]
+version = "0.6.1"
+default-features = false
+features = ["std", "futures-03"]
 
 [dev-dependencies]
 capnp = { version = "0.21.0", path = "../capnp", features = ["quickcheck"] }
+embedded-io = { version = "0.6.1", features = ["std"] }
+embedded-io-async = { version = "0.6.1", features = ["std"] }
 quickcheck = "1"
 
 [lints]

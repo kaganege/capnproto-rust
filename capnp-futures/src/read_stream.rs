@@ -18,20 +18,20 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use alloc::boxed::Box;
+use core::future::Future;
+use core::pin::Pin;
 
 use capnp::{message, Error};
-use futures_util::stream::Stream;
-use futures_util::AsyncRead;
+use embedded_io_async::{ErrorType, Read};
 
 async fn read_next_message<R>(
     mut reader: R,
     options: message::ReaderOptions,
 ) -> Result<(R, Option<message::Reader<capnp::serialize::OwnedSegments>>), Error>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
+    <R as ErrorType>::Error: Into<Error>,
 {
     let m = crate::serialize::try_read_message(&mut reader, options).await?;
     Ok((reader, m))
@@ -44,17 +44,18 @@ type ReadStreamResult<R> =
 #[must_use = "streams do nothing unless polled"]
 pub struct ReadStream<'a, R>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
 {
     options: message::ReaderOptions,
     read: Pin<Box<dyn Future<Output = ReadStreamResult<R>> + 'a>>,
 }
 
-impl<R> Unpin for ReadStream<'_, R> where R: AsyncRead + Unpin {}
+impl<R> Unpin for ReadStream<'_, R> where R: Read + Unpin {}
 
 impl<'a, R> ReadStream<'a, R>
 where
-    R: AsyncRead + Unpin + 'a,
+    R: Read + Unpin + 'a,
+    <R as ErrorType>::Error: Into<Error>,
 {
     pub fn new(reader: R, options: message::ReaderOptions) -> Self {
         ReadStream {
@@ -62,24 +63,15 @@ where
             options,
         }
     }
-}
 
-impl<'a, R> Stream for ReadStream<'a, R>
-where
-    R: AsyncRead + Unpin + 'a,
-{
-    type Item = Result<message::Reader<capnp::serialize::OwnedSegments>, Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let (r, m) = match Future::poll(self.read.as_mut(), cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e))),
-            Poll::Ready(Ok(x)) => x,
+    pub async fn read(
+        &mut self,
+    ) -> Option<Result<message::Reader<capnp::serialize::OwnedSegments>, Error>> {
+        let (r, m) = match self.read.as_mut().await {
+            Ok(x) => x,
+            Err(e) => return Some(Err(e)),
         };
         self.read = Box::pin(read_next_message(r, self.options));
-        match m {
-            Some(message) => Poll::Ready(Some(Ok(message))),
-            None => Poll::Ready(None),
-        }
+        m.map(Ok)
     }
 }

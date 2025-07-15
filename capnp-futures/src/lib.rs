@@ -18,10 +18,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#![cfg_attr(any(not(feature = "std"), not(test)), no_std)]
+
+#[macro_use]
+extern crate alloc;
+
 pub use read_stream::ReadStream;
-pub use write_queue::{write_queue, Sender};
 
 mod read_stream;
 pub mod serialize;
 pub mod serialize_packed;
-mod write_queue;

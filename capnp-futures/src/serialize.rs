@@ -23,9 +23,10 @@
 //!
 //! Each message is preceded by a segment table indicating the size of its segments.
 
+use alloc::string::ToString;
 use capnp::serialize::{OwnedSegments, SegmentLengthsBuilder};
-use capnp::{message, Error, OutputSegments, Result};
-use futures_util::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use capnp::{message, Error, ErrorKind, OutputSegments, Result};
+use embedded_io_async::{ErrorType, Read, ReadExactError, Write};
 
 /// Asynchronously reads a message from `reader`.
 pub async fn read_message<R>(
@@ -33,7 +34,8 @@ pub async fn read_message<R>(
     options: message::ReaderOptions,
 ) -> Result<message::Reader<OwnedSegments>>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
+    <R as ErrorType>::Error: Into<Error>,
 {
     match try_read_message(reader, options).await? {
         Some(s) => Ok(s),
@@ -51,7 +53,8 @@ pub async fn try_read_message<R>(
     options: message::ReaderOptions,
 ) -> Result<Option<message::Reader<OwnedSegments>>>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
+    <R as ErrorType>::Error: Into<Error>,
 {
     let Some(segment_lengths_builder) = read_segment_table(&mut reader, options).await? else {
         return Ok(None);
@@ -71,15 +74,24 @@ async fn read_segment_table<R>(
     options: message::ReaderOptions,
 ) -> Result<Option<SegmentLengthsBuilder>>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
+    <R as ErrorType>::Error: Into<Error>,
 {
     let mut buf: [u8; 8] = [0; 8];
     {
-        let n = reader.read(&mut buf[..]).await?;
+        let n = reader.read(&mut buf[..]).await.map_err(Into::into)?;
         if n == 0 {
             return Ok(None);
         } else if n < 8 {
-            reader.read_exact(&mut buf[n..]).await?;
+            reader
+                .read_exact(&mut buf[n..])
+                .await
+                .map_err(|e| match e {
+                    ReadExactError::UnexpectedEof => {
+                        capnp::Error::from_kind(ErrorKind::PrematureEndOfFile)
+                    }
+                    ReadExactError::Other(e) => e.into(),
+                })?;
         }
     }
     let (segment_count, first_segment_length) = parse_segment_table_first(&buf[..])?;
@@ -89,7 +101,10 @@ where
     if segment_count > 1 {
         if segment_count < 4 {
             // small enough that we can reuse our existing buffer
-            reader.read_exact(&mut buf).await?;
+            reader
+                .read_exact(&mut buf)
+                .await
+                .map_err(|_| capnp::Error::from_kind(ErrorKind::Failed))?;
             for idx in 0..(segment_count - 1) {
                 let segment_len =
                     u32::from_le_bytes(buf[(idx * 4)..(idx + 1) * 4].try_into().unwrap()) as usize;
@@ -97,7 +112,10 @@ where
             }
         } else {
             let mut segment_sizes = vec![0u8; (segment_count & !1) * 4];
-            reader.read_exact(&mut segment_sizes[..]).await?;
+            reader
+                .read_exact(&mut segment_sizes[..])
+                .await
+                .map_err(|_| capnp::Error::from_kind(ErrorKind::Failed))?;
             for idx in 0..(segment_count - 1) {
                 let segment_len =
                     u32::from_le_bytes(segment_sizes[(idx * 4)..(idx + 1) * 4].try_into().unwrap())
@@ -130,9 +148,12 @@ async fn read_segments<R>(
     options: message::ReaderOptions,
 ) -> Result<message::Reader<OwnedSegments>>
 where
-    R: AsyncRead + Unpin,
+    R: Read + Unpin,
+    <R as ErrorType>::Error: Into<Error>,
 {
-    read.read_exact(&mut owned_segments[..]).await?;
+    read.read_exact(&mut owned_segments[..])
+        .await
+        .map_err(|_| capnp::Error::from_kind(ErrorKind::Failed))?;
     Ok(message::Reader::new(owned_segments, options))
 }
 
@@ -178,7 +199,7 @@ where
     }
 }
 
-impl<A> AsOutputSegments for ::std::rc::Rc<message::Builder<A>>
+impl<A> AsOutputSegments for alloc::rc::Rc<message::Builder<A>>
 where
     A: message::Allocator,
 {
@@ -187,7 +208,7 @@ where
     }
 }
 
-impl<A> AsOutputSegments for ::std::sync::Arc<message::Builder<A>>
+impl<A> AsOutputSegments for alloc::sync::Arc<message::Builder<A>>
 where
     A: message::Allocator,
 {
@@ -199,7 +220,8 @@ where
 /// Writes the provided message to `writer`. Does not call `flush()`.
 pub async fn write_message<W, M>(mut writer: W, message: M) -> Result<()>
 where
-    W: AsyncWrite + Unpin,
+    W: Write + Unpin,
+    <W as ErrorType>::Error: Into<Error>,
     M: AsOutputSegments,
 {
     let segments = message.as_output_segments();
@@ -208,9 +230,10 @@ where
     Ok(())
 }
 
-async fn write_segment_table<W>(mut write: W, segments: &[&[u8]]) -> ::std::io::Result<()>
+async fn write_segment_table<W>(mut write: W, segments: &[&[u8]]) -> Result<()>
 where
-    W: AsyncWrite + Unpin,
+    W: Write + Unpin,
+    <W as ErrorType>::Error: Into<Error>,
 {
     let mut buf: [u8; 8] = [0; 8];
     let segment_count = segments.len();
@@ -218,7 +241,7 @@ where
     // write the first Word, which contains segment_count and the 1st segment length
     buf[0..4].copy_from_slice(&(segment_count as u32 - 1).to_le_bytes());
     buf[4..8].copy_from_slice(&((segments[0].len() / 8) as u32).to_le_bytes());
-    write.write_all(&buf).await?;
+    write.write_all(&buf).await.map_err(Into::into)?;
 
     if segment_count > 1 {
         if segment_count < 4 {
@@ -231,7 +254,7 @@ where
                     *value = 0;
                 }
             }
-            write.write_all(&buf).await?;
+            write.write_all(&buf).await.map_err(Into::into)?;
         } else {
             let mut buf = vec![0; (segment_count & !1) * 4];
             for idx in 1..segment_count {
@@ -243,7 +266,7 @@ where
                     buf[idx] = 0
                 }
             }
-            write.write_all(&buf).await?;
+            write.write_all(&buf).await.map_err(Into::into)?;
         }
     }
     Ok(())
@@ -252,28 +275,25 @@ where
 /// Writes segments to `write`.
 async fn write_segments<W>(mut write: W, segments: &[&[u8]]) -> Result<()>
 where
-    W: AsyncWrite + Unpin,
+    W: Write + Unpin,
+    <W as ErrorType>::Error: Into<Error>,
 {
     for segment in segments {
-        write.write_all(segment).await?;
+        write.write_all(segment).await.map_err(Into::into)?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 pub mod test {
-    use std::cmp;
-    use std::io::{self, Read, Write};
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
+    use embedded_io_adapters::futures_03::FromFutures;
+    use embedded_io_adapters::std::FromStd;
     use futures::io::Cursor;
-    use futures::{AsyncRead, AsyncWrite};
 
     use quickcheck::{quickcheck, TestResult};
 
     use capnp::message::ReaderSegments;
-    use capnp::{message, OutputSegments};
+    use capnp::{message, Error, OutputSegments};
 
     use super::{read_segment_table, try_read_message, write_message, AsOutputSegments};
 
@@ -290,7 +310,7 @@ pub mod test {
         );
         let segment_lengths = exec
             .run_until(read_segment_table(
-                Cursor::new(&buf[..]),
+                FromFutures::new(Cursor::new(&buf[..])),
                 message::ReaderOptions::new(),
             ))
             .unwrap()
@@ -308,7 +328,7 @@ pub mod test {
 
         let segment_lengths = exec
             .run_until(read_segment_table(
-                &mut Cursor::new(&buf[..]),
+                FromFutures::new(&mut Cursor::new(&buf[..])),
                 message::ReaderOptions::new(),
             ))
             .unwrap()
@@ -327,7 +347,7 @@ pub mod test {
         );
         let segment_lengths = exec
             .run_until(read_segment_table(
-                &mut Cursor::new(&buf[..]),
+                FromFutures::new(&mut Cursor::new(&buf[..])),
                 message::ReaderOptions::new(),
             ))
             .unwrap()
@@ -346,7 +366,7 @@ pub mod test {
         );
         let segment_lengths = exec
             .run_until(read_segment_table(
-                &mut Cursor::new(&buf[..]),
+                FromFutures::new(&mut Cursor::new(&buf[..])),
                 message::ReaderOptions::new(),
             ))
             .unwrap()
@@ -370,7 +390,7 @@ pub mod test {
         );
         let segment_lengths = exec
             .run_until(read_segment_table(
-                &mut Cursor::new(&buf[..]),
+                FromFutures::new(&mut Cursor::new(&buf[..])),
                 message::ReaderOptions::new(),
             ))
             .unwrap()
@@ -392,7 +412,7 @@ pub mod test {
         buf.extend([0; 513 * 4]);
         assert!(exec
             .run_until(read_segment_table(
-                Cursor::new(&buf[..]),
+                FromFutures::new(Cursor::new(&buf[..])),
                 message::ReaderOptions::new()
             ))
             .is_err());
@@ -401,7 +421,7 @@ pub mod test {
         buf.extend([0, 0, 0, 0]); // 1 segments
         assert!(exec
             .run_until(read_segment_table(
-                Cursor::new(&buf[..]),
+                FromFutures::new(Cursor::new(&buf[..])),
                 message::ReaderOptions::new()
             ))
             .is_err());
@@ -412,7 +432,7 @@ pub mod test {
         buf.extend([0; 3]);
         assert!(exec
             .run_until(read_segment_table(
-                Cursor::new(&buf[..]),
+                FromFutures::new(Cursor::new(&buf[..])),
                 message::ReaderOptions::new()
             ))
             .is_err());
@@ -421,7 +441,7 @@ pub mod test {
         buf.extend([255, 255, 255, 255]); // 0 segments
         assert!(exec
             .run_until(read_segment_table(
-                Cursor::new(&buf[..]),
+                FromFutures::new(Cursor::new(&buf[..])),
                 message::ReaderOptions::new()
             ))
             .is_err());
@@ -532,139 +552,159 @@ pub mod test {
     /// Wraps a `Read` instance and introduces blocking.
     pub(crate) struct BlockingRead<R>
     where
-        R: Read,
+        R: embedded_io_async::Read,
     {
         /// The wrapped reader
         pub read: R,
-
-        /// Number of bytes to read before blocking
-        blocking_period: usize,
-
-        /// Number of bytes read since last blocking
-        idx: usize,
     }
 
     impl<R> BlockingRead<R>
     where
-        R: Read,
+        R: embedded_io_async::Read,
     {
-        pub(crate) fn new(read: R, blocking_period: usize) -> Self {
-            Self {
-                read,
-                blocking_period,
-                idx: 0,
-            }
+        pub(crate) fn new(read: R) -> Self {
+            Self { read }
         }
     }
 
-    impl<R> AsyncRead for BlockingRead<R>
+    impl<R> embedded_io_async::ErrorType for BlockingRead<R>
     where
-        R: Read + Unpin,
+        R: embedded_io_async::Read + Unpin,
+        <R as embedded_io_async::ErrorType>::Error: Into<Error>,
     {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            if self.idx == 0 {
-                self.idx = self.blocking_period;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            } else {
-                let len = cmp::min(self.idx, buf.len());
-                let bytes_read = match self.read.read(&mut buf[..len]) {
-                    Err(e) => return Poll::Ready(Err(e)),
-                    Ok(n) => n,
-                };
-                self.idx -= bytes_read;
-                Poll::Ready(Ok(bytes_read))
-            }
+        type Error = R::Error;
+    }
+
+    impl<R> embedded_io_async::Read for BlockingRead<R>
+    where
+        R: embedded_io_async::Read + Unpin,
+        <R as embedded_io_async::ErrorType>::Error: Into<Error>,
+    {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            self.read.read(buf).await
         }
     }
 
     /// Wraps a `Write` instance and introduces blocking.
     pub(crate) struct BlockingWrite<W>
     where
-        W: Write,
+        W: embedded_io_async::Write,
     {
         /// The wrapped writer
         writer: W,
-
-        /// Number of bytes to write before blocking
-        blocking_period: usize,
-
-        /// Number of bytes written since last blocking
-        idx: usize,
     }
 
     impl<W> BlockingWrite<W>
     where
-        W: Write,
+        W: embedded_io_async::Write,
     {
-        pub(crate) fn new(writer: W, blocking_period: usize) -> Self {
-            Self {
-                writer,
-                blocking_period,
-                idx: 0,
-            }
+        pub(crate) fn new(writer: W) -> Self {
+            Self { writer }
         }
         pub(crate) fn into_writer(self) -> W {
             self.writer
         }
     }
 
-    impl<W> AsyncWrite for BlockingWrite<W>
+    impl<W> embedded_io_async::ErrorType for BlockingWrite<W>
     where
-        W: Write + Unpin,
+        W: embedded_io_async::Write + Unpin,
+        <W as embedded_io_async::ErrorType>::Error: Into<Error>,
     {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            if self.idx == 0 {
-                self.idx = self.blocking_period;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            } else {
-                let len = cmp::min(self.idx, buf.len());
-                let bytes_written = match self.writer.write(&buf[..len]) {
-                    Err(e) => return Poll::Ready(Err(e)),
-                    Ok(n) => n,
-                };
-                self.idx -= bytes_written;
-                Poll::Ready(Ok(bytes_written))
-            }
-        }
-        fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-            Poll::Ready(self.writer.flush())
+        type Error = W::Error;
+    }
+
+    impl<W> embedded_io_async::Write for BlockingWrite<W>
+    where
+        W: embedded_io_async::Write + Unpin,
+        <W as embedded_io_async::ErrorType>::Error: Into<Error>,
+    {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.writer.write(buf).await
         }
 
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.writer.flush().await
+        }
+
+        async fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            self.writer.write_all(buf).await
+        }
+    }
+
+    pub(crate) struct FromEmbeddedIo<T: ?Sized> {
+        inner: T,
+    }
+
+    impl<T> FromEmbeddedIo<T> {
+        pub fn new(inner: T) -> Self {
+            Self { inner }
+        }
+    }
+
+    impl<T: ?Sized> FromEmbeddedIo<T> {
+        /// Mutably borrow the inner object.
+        pub fn inner_mut(&mut self) -> &mut T {
+            &mut self.inner
+        }
+    }
+
+    impl<T> embedded_io_async::ErrorType for FromEmbeddedIo<T>
+    where
+        T: embedded_io::ErrorType,
+    {
+        type Error = T::Error;
+    }
+
+    impl<T> embedded_io_async::Read for FromEmbeddedIo<T>
+    where
+        T: embedded_io::Read,
+    {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            self.inner.read(buf)
+        }
+
+        async fn read_exact(
+            &mut self,
+            buf: &mut [u8],
+        ) -> Result<(), embedded_io::ReadExactError<Self::Error>> {
+            self.inner.read_exact(buf)
+        }
+    }
+
+    impl<T> embedded_io_async::Write for FromEmbeddedIo<T>
+    where
+        T: embedded_io::Write,
+    {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.inner.write(buf)
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.inner.flush()
+        }
+
+        async fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            self.inner.write_all(buf)
         }
     }
 
     #[cfg_attr(miri, ignore)] // Miri takes a long time with quickcheck
     #[test]
     fn check_round_trip_async() {
-        fn round_trip(
-            read_blocking_period: usize,
-            write_blocking_period: usize,
-            segments: Vec<Vec<capnp::Word>>,
-        ) -> TestResult {
-            if segments.is_empty() || read_blocking_period == 0 || write_blocking_period == 0 {
+        fn round_trip(write_blocking_period: usize, segments: Vec<Vec<capnp::Word>>) -> TestResult {
+            if segments.is_empty() || write_blocking_period == 0 {
                 return TestResult::discard();
             }
             let (mut read, segments) = {
                 let cursor = std::io::Cursor::new(Vec::new());
-                let mut writer = BlockingWrite::new(cursor, write_blocking_period);
+                let mut writer = BlockingWrite::new(FromEmbeddedIo::new(FromStd::new(cursor)));
                 futures::executor::block_on(Box::pin(write_message(&mut writer, &segments)))
                     .expect("writing");
 
                 let mut cursor = writer.into_writer();
-                cursor.set_position(0);
-                (BlockingRead::new(cursor, read_blocking_period), segments)
+                cursor.inner_mut().inner_mut().set_position(0);
+                (BlockingRead::new(cursor), segments)
             };
 
             let message = futures::executor::block_on(Box::pin(try_read_message(
@@ -681,6 +721,6 @@ pub mod test {
             }))
         }
 
-        quickcheck(round_trip as fn(usize, usize, Vec<Vec<capnp::Word>>) -> TestResult);
+        quickcheck(round_trip as fn(usize, Vec<Vec<capnp::Word>>) -> TestResult);
     }
 }
