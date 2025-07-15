@@ -18,6 +18,7 @@ std = ["dep:futures-channel", "dep:futures-util", "capnp/std"]
 [dependencies]
 capnp = { version = "0.21.0", path = "../capnp", default-features = false, features = [
     "alloc",
+    "embedded_io",
 ] }
 
 [dependencies.embedded-io-async]
