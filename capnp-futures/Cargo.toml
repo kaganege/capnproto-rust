@@ -14,13 +14,15 @@ keywords = ["async"]
 [features]
 default = ["std"]
 std = ["dep:futures-channel", "dep:futures-util", "capnp/std"]
-alloc = ["capnp/alloc", "embedded-io-async/alloc"]
 
 [dependencies]
-capnp = { version = "0.21.0", path = "../capnp", default-features = false }
+capnp = { version = "0.21.0", path = "../capnp", default-features = false, features = [
+    "alloc",
+] }
 
 [dependencies.embedded-io-async]
 version = "0.6.1"
+features = ["alloc"]
 
 [dependencies.futures-channel]
 version = "0.3.0"
