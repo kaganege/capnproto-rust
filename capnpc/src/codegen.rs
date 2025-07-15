@@ -534,7 +534,7 @@ const OPTION_ANNOTATION_ID: u64 = 0xabfef22c4ee1964e;
 // StreamResult type ID, as defined in stream.capnp.
 const STREAM_RESULT_ID: u64 = 0x995f9a3377c0b16e;
 
-fn name_annotation_value(annotation: schema_capnp::annotation::Reader) -> capnp::Result<&str> {
+fn name_annotation_value(annotation: schema_capnp::annotation::Reader<'_>) -> capnp::Result<&str> {
     if let schema_capnp::value::Text(t) = annotation.get_value()?.which()? {
         let name = t?.to_str()?;
         for c in name.chars() {
@@ -553,7 +553,7 @@ fn name_annotation_value(annotation: schema_capnp::annotation::Reader) -> capnp:
     }
 }
 
-fn get_field_name(field: schema_capnp::field::Reader) -> capnp::Result<&str> {
+fn get_field_name(field: schema_capnp::field::Reader<'_>) -> capnp::Result<&str> {
     for annotation in field.get_annotations()? {
         if annotation.get_id() == NAME_ANNOTATION_ID {
             return name_annotation_value(annotation);
@@ -562,7 +562,7 @@ fn get_field_name(field: schema_capnp::field::Reader) -> capnp::Result<&str> {
     Ok(field.get_name()?.to_str()?)
 }
 
-fn get_enumerant_name(enumerant: schema_capnp::enumerant::Reader) -> capnp::Result<&str> {
+fn get_enumerant_name(enumerant: schema_capnp::enumerant::Reader<'_>) -> capnp::Result<&str> {
     for annotation in enumerant.get_annotations()? {
         if annotation.get_id() == NAME_ANNOTATION_ID {
             return name_annotation_value(annotation);
@@ -754,7 +754,7 @@ pub fn getter_text(
             let should_get_option = is_option_field(*field)?;
 
             let typ = if should_get_option {
-                format!("Option<{}>", inner_type)
+                format!("Option<{inner_type}>")
             } else {
                 inner_type
             };
@@ -987,7 +987,7 @@ fn zero_fields_of_group(
             Ok(Branch(result))
         }
         _ => Err(Error::failed(
-            "zero_fields_of_groupd() expected a struct".to_string(),
+            "zero_fields_of_group() expected a struct".to_string(),
         )),
     }
 }
@@ -1697,11 +1697,15 @@ fn generate_get_field_types(
         }
     }
     let body = if branches.is_empty() {
-        Line("panic!(\"invalid field index {}\", index)".into())
+        Line(fmt!(
+            ctx,
+            "{capnp}::introspect::panic_invalid_field_index(index)"
+        ))
     } else {
-        branches.push(Line(
-            "_ => panic!(\"invalid field index {}\", index),".into(),
-        ));
+        branches.push(Line(fmt!(
+            ctx,
+            "_ => {capnp}::introspect::panic_invalid_field_index(index),"
+        )));
         Branch(vec![
             Line("match index {".into()),
             indent(branches),
@@ -1748,7 +1752,7 @@ fn annotation_branch(
         let brand = annotation.get_brand()?;
         let the_mod = ctx.get_qualified_module(id);
         let func = do_branding(ctx, id, brand, Leaf::GetType, &the_mod)?;
-        Ok(Line(format!("({child_index:?}, {index}) => {}(),", func)))
+        Ok(Line(format!("({child_index:?}, {index}) => {func}(),")))
     } else {
         // Avoid referring to the annotation in the generated code, so that users can import
         // annotation schemas like `c++.capnp` or `rust.capnp` without needing to generate code
@@ -1803,11 +1807,15 @@ fn generate_get_annotation_types(
     }
 
     let body = if branches.is_empty() {
-        Line("panic!(\"invalid annotation indices ({:?}, {}) \", child_index, index)".into())
+        Line(fmt!(
+            ctx,
+            "{capnp}::introspect::panic_invalid_annotation_indices(child_index, index)"
+        ))
     } else {
-        branches.push(Line(
-            "_ => panic!(\"invalid annotation indices ({:?}, {}) \", child_index, index),".into(),
-        ));
+        branches.push(Line(fmt!(
+            ctx,
+            "_ => {capnp}::introspect::panic_invalid_annotation_indices(child_index, index),"
+        )));
         indent(vec![
             Line("match (child_index, index) {".into()),
             indent(branches),
@@ -2623,7 +2631,7 @@ fn generate_node(
             ]));
 
             output.push(Branch(vec![
-                Line(format!("mod {} {{", name_as_mod)),
+                Line(format!("mod {name_as_mod} {{")),
                 Branch(vec![
                     crate::pointer_constants::node_word_array_declaration(
                         ctx,
@@ -3213,7 +3221,7 @@ fn generate_node(
             let params = node_reader.parameters_texts(ctx);
             let last_name = ctx.get_last_name(node_id)?;
             let mut interior = vec![];
-            interior.push(Line(format!("pub const ID: u64 = 0x{:x};", node_id)));
+            interior.push(Line(format!("pub const ID: u64 = 0x{node_id:x};")));
 
             let ty = annotation_reader.get_type()?;
             if !is_generic {
@@ -3244,7 +3252,7 @@ fn generate_node(
                 [
                     doc_comments,
                     vec![
-                        Line(format!("pub mod {} {{", last_name)),
+                        Line(format!("pub mod {last_name} {{")),
                         indent(interior),
                         Line("}".into()),
                     ],
